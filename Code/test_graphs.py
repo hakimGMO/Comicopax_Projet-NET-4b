@@ -1,3 +1,9 @@
+"""
+Ce script charge des fichiers GraphML,
+crée des visualisations de graphes et les
+enregistre sous forme d'images PNG.
+"""
+
 import os
 from graph_visualizer import GraphVisualizer
 from graph_plotter import GraphPlotter
@@ -13,6 +19,11 @@ visualizer = GraphVisualizer(data_dir)
 graphml_files = [f for f in os.listdir(data_dir) if f.endswith('.graphml')]
 
 for file_name in graphml_files:
+    """
+    Charge un fichier GraphML, crée une
+    visualisation du graphe et l'enregistre
+    sous forme d'image PNG.
+    """
     visualizer.load_graph(file_name)
     plotter = GraphPlotter(visualizer.graph)
     base_name = os.path.splitext(file_name)[0]

@@ -1,4 +1,4 @@
-#source myenv/bin/activate  激活虚拟环境
+#source myenv/bin/activate        ///Activate the virtual environment
 # deactivate
 
 #graphml_file = '/mnt/d/M2/NET/demo_file/reactome-77-reaction_R-HSA-5696021.graphml'
@@ -44,12 +44,27 @@ import matplotlib.pyplot as plt
 graphml_file = '/mnt/d/M2/NET/demo_file/reactome-77-reaction_R-HSA-5696021.graphml'
 
 G = nx.read_graphml(graphml_file)
-G = nx.relabel_nodes(G, {node: data['label'] for node, data in G.nodes(data=True) if 'label' in data})
-node_labels = {node: data.get('label', node) for node, data in G.nodes(data=True)}
-edge_labels = {(u, v): data.get('label', '') for u, v, data in G.edges(data=True)}
-label_to_id = {data['label']: node for node, data in G.nodes(data=True) if 'label' in data}
-nx.draw(G, labels=node_labels, with_labels=True, node_size=500, node_color="lightblue", font_size=10, font_weight="bold")
 
+
+# Mapping node IDs to tag names
+new_node_names = {}  # Create an empty dictionary for storing new node names
+
+for node, data in G.nodes(data=True):
+    if 'label' in data:  
+        new_node_names[node] = data['label']  
+
+G = nx.relabel_nodes(G, new_node_names)
+
+# Create a dictionary for displaying the labels of the edges during plotting
+edge_labels = {}
+for u, v, data in G.edges(data=True):
+    edge_labels[(u, v)] = data.get('label', '')
+
+# plot
+plt.figure(figsize=(10, 8))
+pos = nx.spring_layout(G)
+nx.draw(G, pos, with_labels=True, node_size=500, node_color="lightblue", font_size=10, font_weight="bold")
+nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8, font_color="black")
 plt.show()
 
 # Selecting Start and End Label Names
@@ -66,7 +81,7 @@ if source in G and target in G:
 else:
     print("can't find the noeud")
 
-# 计算并输出每个节点的中介中心性，使用标签名
+# Calculate and output the mediated centrality of each node, by using the label name
 betweenness = nx.betweenness_centrality(G)
 print("\n Intermediary centrality of nodes :")
 for node, centrality in betweenness.items():

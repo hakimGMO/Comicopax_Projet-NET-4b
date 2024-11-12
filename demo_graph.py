@@ -1,3 +1,4 @@
+#python -m venv myenv    /// In terminal,  create the virtual env  
 #source myenv/bin/activate        ///Activate the virtual environment
 # deactivate
 

@@ -1,26 +1,36 @@
 # Comicopax_Projet-NET-4b
 
-## Projet_NET, Equipe 4b
+## Description
+Projet de couplage de données transcriptomiques, protéomiques et métabolomiques par une approche systémique.
 
-Couplage de données transcriptomiques, protéomique et métabolomiques par une approche systémique.
-Collaboration : Emmanuelle Becker et Olivier Dameron (Laboratoire INRIA-IRISA) et Florence Gondret (Laboratoire IINRAe-PEGASE).
-Contexte biologique : Intégration de données -omiques de nature différentes Méthodes : Parcours de graphes, marches aléatoires Format BioPAX
+### Contexte
+- Collaboration : Emmanuelle Becker et Olivier Dameron (Laboratoire INRIA-IRISA) et Florence Gondret (Laboratoire IINRAe-PEGASE)
+- Contexte biologique : Intégration de données -omiques de nature différentes
+- Méthodes : Parcours de graphes, marches aléatoires
+- Format : BioPAX
 
-## Copier le git :
+## Fonctionnalités
+- Analyse de réseaux protéiques
+- Calcul des chemins les plus courts
+- Analyse de centralité des nœuds
+- Identification des nœuds ubiquitaires
+- Génération de rapports HTML et TXT
+- Support du traitement parallèle
 
-Dans un terminal bash, se positionner dans le dossier souhaité, puis :
-```
+## Prérequis
+- Python 3.x
+- NetworkX
+- Autres dépendances (à lister)
+
+## Installation
+1. Cloner le dépôt :
+```bash
 git clone https://github.com/hakimGMO/Comicopax_Projet-NET-4b.git
+cd Comicopax_Projet-NET-4b
 ```
-## Mettre à jour son dossier source après le commit de quelqu'un :
+
+2. installer les dépendances
+```bash
+pip install networkx
 ```
-git pull
-```
-## Pour commit :
-```
-git commit -a -m "Message qui va avec le commit"
-git push
-```
-## Tutoriel NetworkX: 
-Doc NetworkX: https://networkx.org/documentation/stable/reference/readwrite/generated/networkx.readwrite.graphml.read_graphml.html
-Tutorials for graph librairies: https://youtube.com/playlist?list=PLGZqdNxqKzfYXTwYAZIlmjnQmrytCSR1J&si=7r3W5AKvKs33zUx0
+## Utilisation

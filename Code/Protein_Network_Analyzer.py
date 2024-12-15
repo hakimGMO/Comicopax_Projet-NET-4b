@@ -6,45 +6,69 @@ import os
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
+from itertools import combinations
+from typing import List, Union, Dict, Tuple
 
 class ProteinNetworkAnalyzer:
     """
-    Analyzes protein interaction networks from GraphML files.
-    
-    Provides comprehensive analysis of protein networks including path analysis,
-    node frequency analysis, centrality calculations, and report generation.
-    The analyzer supports parallel processing for improved performance and
-    can generate both HTML and text reports.
-    
-    Attributes:
-        graph (networkx.Graph): NetworkX graph representing the protein network
-        threshold (float): Threshold value for identifying ubiquitous nodes (0-1)
-        node_types (dict): Maps nodes to their biological types
-        proteins (list): List of protein nodes in the network
-        shortest_paths (list): List of shortest paths found in analysis
-        frequent_nodes (defaultdict): Frequency counter for nodes by type
-        ubiquitous_nodes (set): Set of frequently occurring nodes
-        undirected_graph (networkx.Graph): Undirected version of the network
-    """
-    
-    def __init__(self, graphml_file: str, threshold: float = 0.9):
-        """
-        Initialize the ProteinNetworkAnalyzer with a GraphML file.
+    A class for analyzing protein interaction networks from GraphML files.
 
+    This analyzer processes protein networks to identify and analyze shortest paths,
+    calculate node frequencies, and determine network centrality metrics.
+
+    Attributes:
+        DEFAULT_BLACKLIST (set): Default set of metabolites and small molecules to exclude
+        graph (NetworkX.Graph): The loaded network graph
+        threshold (float): Threshold value for filtering interactions
+        blacklist (set): Current set of nodes to exclude from analysis
+        node_types (dict): Mapping of nodes to their biological types
+        proteins (list): List of valid protein nodes after filtering
+        shortest_paths (list): List of all analyzed shortest paths
+        pair_frequencies (dict): Frequencies of nodes in paths between specific pairs
+        normalized_frequencies (dict): Overall normalized node frequencies
+        analyzed_nodes (set): Set of all nodes encountered in analysis
+        undirected_graph (NetworkX.Graph): Undirected version of the network
+
+    Args:
+        graphml_file (str): Path to the GraphML file containing the network
+        threshold (float, optional): Threshold for filtering. Defaults to 0.9
+        custom_blacklist (set, optional): Additional nodes to blacklist. Defaults to None
+    """
+
+    DEFAULT_BLACKLIST = {
+        'ATP', 'ADP',
+        'NADH', 'NAD+',
+        'NADPH', 'NADP+',
+        'FADH2', 'FAD',
+        'Pyruvate','Pi', 'Phosphate',
+        'PPi', 'Pyrophosphate',
+        'H+', 'Proton',
+        'CO2','H2O','O2'}
+
+    def __init__(self, graphml_file: str, threshold: float = 0.9, custom_blacklist: set = None):
+        """
+        Initialize the ProteinNetworkAnalyzer with a GraphML file and analysis parameters.
+        
         Args:
-            graphml_file (str): Path to the GraphML file containing the network
-            threshold (float, optional): Threshold for ubiquitous node detection. Defaults to 0.9.
+            graphml_file (str): Path to the GraphML file containing the protein network
+            threshold (float, optional): Threshold value for filtering interactions. Defaults to 0.9
+            custom_blacklist (set, optional): Set of node names to exclude from analysis. Defaults to None
         """
         self.graph = nx.read_graphml(graphml_file)
         self.threshold = threshold
+        self.blacklist = self.DEFAULT_BLACKLIST.union(custom_blacklist or set())
         self._initialize_network()
         
     def _initialize_network(self):
         """
-        Initialize internal network data structures and attributes.
+        Initialize the network by setting up internal data structures and attributes.
         
-        Performs initial setup including node relabeling, type mapping,
-        and creation of derived network representations.
+        This method:
+        - Relabels nodes using their names
+        - Identifies node types
+        - Filters protein nodes against blacklist
+        - Initializes data structures for path analysis
+        - Creates an undirected version of the graph
         """
         self._relabel_nodes()
         
@@ -52,21 +76,46 @@ class ProteinNetworkAnalyzer:
         for node in self.graph.nodes:
             self.node_types[node] = self.graph.nodes[node].get('biopaxType', 'Unknown')
         
-        self.proteins = [node for node, node_type in self.node_types.items() 
-                        if node_type == 'Protein']
+        self.proteins = [node for node in self.graph.nodes 
+                        if self.node_types[node] == 'Protein' 
+                        and not self._is_blacklisted(str(node))]
         
         self.shortest_paths = []
-        self.frequent_nodes = defaultdict(lambda: defaultdict(int))
-        self.ubiquitous_nodes = set()
+        self.pair_frequencies = {}
+        self.normalized_frequencies = defaultdict(lambda: defaultdict(float))
+        self.analyzed_nodes = set()
         
         self.undirected_graph = self.graph.to_undirected()
+    
+    def _is_blacklisted(self, node_name: str) -> bool:
+        """
+        Check if a node is blacklisted using exact matching.
         
+        Args:
+            node_name: Name of the node to check
+                
+        Returns:
+            bool: True if node is blacklisted, False otherwise
+        """
+        node_name = str(node_name).upper().strip()
+        
+        if any(node_name == item.upper().strip() for item in self.blacklist):
+            return True
+            
+        node_words = set(node_name.split())
+        for blacklisted in self.blacklist:
+            blacklisted_words = set(blacklisted.upper().strip().split())
+            if blacklisted_words and blacklisted_words.issubset(node_words):
+                return True
+                
+        return False
+
     def _relabel_nodes(self):
         """
-        Relabel network nodes using their name attributes if available.
+        Relabel network nodes using their 'name' attribute if available.
         
-        Updates the graph in place by replacing node IDs with their corresponding
-        names from the 'name' attribute when present.
+        Modifies the graph in place by replacing node IDs with their corresponding
+        names from the 'name' attribute of each node.
         """
         new_names = {}
         for node in self.graph.nodes:
@@ -74,52 +123,149 @@ class ProteinNetworkAnalyzer:
                 new_names[node] = self.graph.nodes[node]['name']
         self.graph = nx.relabel_nodes(self.graph, new_names)
 
-    def find_shortest_path(self, start: str, end: str) -> list:
+    def find_all_shortest_paths(self, start: str, end: str) -> list:
         """
-        Find the shortest path between two nodes in the network.
-
+        Analyze all shortest paths between selected nodes in the network.
+        
+        This method computes:
+        - All shortest paths between selected nodes
+        - Node frequencies in paths
+        - Normalized frequencies for each node type
+        
         Args:
-            start (str): Starting node identifier
-            end (str): Target node identifier
-
+            num_nodes (int, optional): Number of nodes to randomly select
+            node_list (list, optional): List of specific nodes to analyze
+        
         Returns:
-            list: Ordered list of nodes representing the shortest path if found
-            None: If no path exists between the nodes
+            int: Total number of shortest paths found
+            
+        Raises:
+            ValueError: If neither num_nodes nor node_list is provided
         """
         try:
-            return nx.shortest_path(self.undirected_graph, source=start, target=end)
-        except nx.NetworkXNoPath:
+            return list(nx.all_shortest_paths(self.undirected_graph, source=start, target=end))
+        except (nx.NetworkXNoPath, nx.NetworkXError):
             return None
 
-    def analyze_paths(self, num_iterations: int = 100) -> int:
+    def select_nodes(self, num_nodes=None, node_list=None):
         """
-        Analyze random paths between protein pairs using parallel processing.
+        Select nodes for analysis, raising error if blacklisted nodes are found.
+        
+        Args:
+            num_nodes: Number of nodes to randomly select from proteins list
+            node_list: List of specific nodes to analyze
+            
+        Returns:
+            list: Selected nodes if all are valid
+            
+        Raises:
+            ValueError: If blacklisted nodes are found or no valid nodes remain
+        """
+        if num_nodes is None and node_list is None:
+            raise ValueError("Either num_nodes or node_list must be provided")
+        
+        if num_nodes is not None:
+            if not self.proteins:
+                raise ValueError(
+                    "No valid protein nodes found after filtering blacklist. "
+                    "Use --disable-blacklist to include blacklisted nodes."
+                )
+                
+            if num_nodes > len(self.proteins):
+                raise ValueError(
+                    f"Requested {num_nodes} nodes but only {len(self.proteins)} valid protein nodes available"
+                )
+            return random.sample(self.proteins, num_nodes)
+        
+        blacklisted_nodes = []
+        missing_nodes = []
+        valid_nodes = []
+        
+        for node in node_list:
+            if node not in self.graph.nodes():
+                missing_nodes.append(node)
+            elif self._is_blacklisted(str(node)):
+                blacklisted_nodes.append(node)
+            else:
+                valid_nodes.append(node)
+        
+        error_msgs = []
+        if missing_nodes:
+            error_msgs.append(f"Nodes not found in network: {', '.join(missing_nodes)}")
+        if blacklisted_nodes:
+            error_msgs.append(
+                f"Blacklisted nodes detected: {', '.join(blacklisted_nodes)}\n"
+                "To proceed, either:\n"
+                "1. Remove the blacklisted nodes from your input\n"
+                "2. Use --disable-blacklist to disable the blacklist"
+            )
+        
+        if error_msgs:
+            raise ValueError("\n".join(error_msgs))
+            
+        if not valid_nodes:
+            raise ValueError("No valid nodes remain for analysis")
+            
+        return valid_nodes
+
+    def _compute_pair_frequencies(self, paths: List[List[str]], pair: Tuple[str, str]):
+        """
+        Calculate normalized frequencies for a specific pair of nodes.
+        
+        Args:
+            paths (List[List[str]]): List of shortest paths for this pair of nodes
+            pair (Tuple[str, str]): Tuple containing the node pair (start, end)
+        """
+        pair_freq = defaultdict(lambda: defaultdict(int))
+        num_paths = len(paths)
+        
+        for path in paths:
+            for node in path:
+                node_type = self.node_types[node]
+                pair_freq[node_type][node] += 1
+        
+        normalized_pair_freq = defaultdict(lambda: defaultdict(float))
+        for node_type, nodes in pair_freq.items():
+            for node, freq in nodes.items():
+                normalized_freq = freq / num_paths
+                normalized_pair_freq[node_type][node] = normalized_freq
+                
+        self.pair_frequencies[pair] = normalized_pair_freq
+
+    def analyze_paths(self, num_nodes=None, node_list=None):
+        """
+        Analyze shortest paths between selected proteins in the network and compute path frequencies.
 
         Args:
-            num_iterations (int, optional): Number of random protein pairs to analyze.
-                Defaults to 100.
+            num_nodes (int, optional): Number of random proteins to analyze
+            node_list (List[str], optional): List of specific proteins to analyze
 
         Returns:
-            int: Number of valid paths found
+            int: Total number of shortest paths found in the analysis
+            
+        Raises:
+            ValueError: If neither num_nodes nor node_list is provided, or if no valid nodes are found
         """
         print("\n=== Starting Path Analysis ===")
-        print(f"Analyzing {num_iterations} random protein pairs...")
         
-        pairs = []
-        while len(pairs) < num_iterations:
-            p1, p2 = random.sample(self.proteins, 2)
-            pairs.append((p1, p2))
+        selected_proteins = self.select_nodes(num_nodes, node_list)
+        pairs = list(combinations(selected_proteins, 2))
+        print(f"Analyzing all paths between {len(selected_proteins)} nodes...")
+        print(f"Analyzing {len(pairs)} pairs")
         
-        paths_found = 0
+        total_paths_found = 0
         
-        with ProcessPoolExecutor(max_workers=4) as executor:
-            futures = {executor.submit(self.find_shortest_path, p1, p2): (p1, p2) 
-                    for p1, p2 in pairs}
+        self.normalized_frequencies = defaultdict(lambda: defaultdict(float))
+        
+        for p1, p2 in pairs:
+            pair = (p1, p2)
+            paths = self.find_all_shortest_paths(p1, p2)
             
-            for future in as_completed(futures):
-                path = future.result()
-                if path:
-                    paths_found += 1
+            if paths:
+                total_paths_found += len(paths)
+                self._compute_pair_frequencies(paths, pair)
+                
+                for path in paths:
                     self.shortest_paths.append({
                         'start': path[0],
                         'end': path[-1],
@@ -128,55 +274,67 @@ class ProteinNetworkAnalyzer:
                     })
                     
                     for node in path:
-                        node_type = self.node_types[node]
-                        self.frequent_nodes[node_type][node] += 1
+                        self.analyzed_nodes.add(node)
         
-        print(f"Found {paths_found} valid paths out of {num_iterations} attempts")
+        for pair_freqs in self.pair_frequencies.values():
+            for node_type, nodes in pair_freqs.items():
+                for node, norm_freq in nodes.items():
+                    self.normalized_frequencies[node_type][node] += norm_freq
+        
+        print(f"Found {total_paths_found} shortest paths analyzing {len(pairs)} pairs")
         print("=== Path Analysis Complete ===\n")
-        return paths_found
+        return total_paths_found
 
 
-    def calculate_centrality(self, k: int = 100) -> dict:
+
+    def calculate_centrality(self):
         """
-        Calculate betweenness centrality for nodes in the network.
-
-        Args:
-            k (int, optional): Number of sample nodes for approximation. Defaults to 100.
-
+        Calculate normalized betweenness centrality for all encountered nodes.
+        
         Returns:
-            dict: Mapping of nodes to their betweenness centrality scores
+            dict: Mapping of nodes to their normalized centrality scores 
+                (normalized by NetworkX's built-in normalization)
         """
         print("\n=== Starting Centrality Calculation ===")
-        print(f"Using k={k} samples for approximation...")
         
-        k = min(k, len(self.graph))
+        analyzed_subgraph = self.undirected_graph.subgraph(self.analyzed_nodes)
         
         try:
-            centrality = nx.betweenness_centrality(
-                self.undirected_graph,
-                k=k,
+            raw_centrality = nx.betweenness_centrality(
+                analyzed_subgraph,
                 normalized=True
             )
+            
             print("Centrality calculation successful")
             print("=== Centrality Calculation Complete ===\n")
-            return centrality
-            
+            return raw_centrality
+                
         except nx.NetworkXError:
-            print("Warning: Graph is disconnected. Calculating centrality for each component in parallel...")
-            centrality = {node: 0.0 for node in self.undirected_graph.nodes()}
-            components = list(nx.connected_components(self.undirected_graph))
+            print("Warning: Graph is disconnected. Calculating centrality for each component...")
+            normalized_centrality = {node: 0.0 for node in analyzed_subgraph.nodes()}
+            components = list(nx.connected_components(analyzed_subgraph))
             
             def process_component(comp):
+                """
+                Calculate the betweenness centrality for a single connected component of the graph.
+                
+                Args:
+                    comp (set): Set of nodes forming a connected component of the graph
+                    
+                Returns:
+                    dict: Mapping of nodes to their betweenness centrality scores, normalized 
+                        within the component. Returns {node: 0.0} for single-node components
+                """
                 if len(comp) <= 1:
                     return {node: 0.0 for node in comp}
                     
-                subgraph = self.undirected_graph.subgraph(comp)
+                subgraph = analyzed_subgraph.subgraph(comp)
                 try:
                     return nx.betweenness_centrality(
                         subgraph,
-                        k=min(k, len(subgraph)),
                         normalized=True
                     )
+                    
                 except:
                     print(f"Failed to calculate centrality for component of size {len(comp)}")
                     return {node: 0.0 for node in comp}
@@ -191,41 +349,38 @@ class ProteinNetworkAnalyzer:
                     comp_index = futures[future]
                     try:
                         comp_centrality = future.result()
-                        centrality.update(comp_centrality)
+                        normalized_centrality.update(comp_centrality)
                         print(f"Processed component {comp_index + 1}/{len(components)}")
                     except Exception as e:
                         print(f"Error processing component {comp_index + 1}: {str(e)}")
             
             print("=== Centrality Calculation Complete ===\n")
-            return centrality
+            return normalized_centrality
 
-    def identify_ubiquitous_nodes(self):
+    def get_normalized_frequencies(self):
         """
-        Identify nodes that appear frequently across analyzed paths.
+        Retrieve the combined normalized frequencies of nodes in all shortest paths.
         
-        A node is considered ubiquitous if it appears in a proportion of paths
-        greater than the threshold specified during initialization.
-        
-        Updates the ubiquitous_nodes attribute with the results.
+        Returns:
+            dict: A nested dictionary structure
         """
-        print("\n=== Starting Ubiquitous Nodes Identification ===")
-        print(f"Using threshold: {self.threshold}")
+        return dict(self.normalized_frequencies)
+
+    def get_pair_frequencies(self, start: str, end: str):
+        """
+        Retrieve the normalized frequencies for shortest paths between a specific pair of nodes.
         
-        total_paths = sum(
-            sum(freq.values()) for freq in self.frequent_nodes.values()
-        )
-        
-        if total_paths > 0:
-            self.ubiquitous_nodes = {
-                node for type_nodes, freq in self.frequent_nodes.items()
-                for node, count in freq.items()
-                if count / total_paths >= self.threshold
-            }
-            print(f"Found {len(self.ubiquitous_nodes)} ubiquitous nodes")
-        else:
-            print("No paths available for analysis")
-        
-        print("=== Ubiquitous Nodes Identification Complete ===\n")
+        Args:
+            start (str): Identifier of the starting node
+            end (str): Identifier of the ending node
+
+        Returns:
+            dict: A nested dictionary structure
+        """
+        pair = (start, end)
+        if pair not in self.pair_frequencies:
+            pair = (end, start)  # Essayer l'ordre inverse
+        return self.pair_frequencies.get(pair, {})
 
     def _generate_path_rows(self):
         """
@@ -258,45 +413,114 @@ class ProteinNetworkAnalyzer:
 
     def _generate_frequent_nodes_section(self):
         """
-        Generates HTML content displaying the most frequent nodes for each node type.
+        Generate HTML content displaying the normalized node frequencies.
         
-        For each node type in self.frequent_nodes, creates a section containing:
-        - A header with the node type
-        - A table showing the top 10 most frequent nodes and their occurrence counts
-        
-        The nodes are sorted by frequency in descending order and limited to the top 10.
+        Creates a formatted section showing how often each node appears in the 
+        shortest paths, normalized by the number of paths and grouped by node type.
         
         Returns:
-            str: HTML string containing the formatted frequent nodes information
-        
+            str: HTML-formatted string containing tables of node frequencies
         """
-        html = ""
-        for node_type, occurrences in self.frequent_nodes.items():
-            sorted_nodes = sorted(occurrences.items(), key=lambda x: x[1], reverse=True)[:10]
-            html += f"""
-                <h3>Type: {node_type}</h3>
-                <table>
-                    <tr><th>Node</th><th>Frequency</th></tr>
-                    {"".join(f"<tr><td>{node}</td><td>{freq}</td></tr>"
-                            for node, freq in sorted_nodes)}
-                </table>
-            """
+        html = """
+        <p>These frequencies represent how often each node appears in the shortest paths, 
+        normalized by the number of shortest paths for each protein pair.</p>
+        """
+        
+        normalized_freqs = self.get_normalized_frequencies()
+        
+        for node_type, normalized_occurrences in normalized_freqs.items():
+            sorted_nodes = sorted(normalized_occurrences.items(), 
+                                key=lambda x: x[1], 
+                                reverse=True)
+            
+            if sorted_nodes:  # If we have nodes of this type
+                html += f"""
+                    <h3>Type: {node_type}</h3>
+                    <table>
+                        <tr>
+                            <th>Node</th>
+                            <th>Normalized Frequency</th>
+                        </tr>
+                """
+                
+                for node, norm_freq in sorted_nodes:
+                    html += f"""
+                        <tr>
+                            <td>{node}</td>
+                            <td>{norm_freq:.4f}</td>
+                        </tr>
+                    """
+                html += "</table>"
+        
         return html
+
+    def _generate_pair_frequencies_section(self):
+        """
+        Generate HTML content displaying the normalized frequencies for each pair of nodes.
+        
+        Creates sections for each analyzed node pair showing the frequency of 
+        intermediate nodes in their shortest paths, organized by node type.
+        
+        Returns:
+            str: HTML-formatted string containing pair frequency analysis,
+                or a "No pair frequencies available" message if none exist
+        """
+        if not self.pair_frequencies:
+            return "<p>No pair frequencies available.</p>"
+
+        html = """
+        <div class="pair-frequencies">
+            <p>Each frequency shown below represents the number of times a node appears in the shortest paths 
+            between a specific pair, normalized by the total number of shortest paths for that pair.</p>
+        """
+        
+        for pair, freq_data in sorted(self.pair_frequencies.items()):
+            start, end = pair
+            html += f"""
+            <div class="pair-section">
+                <h3>Pair: {start} ↔ {end}</h3>
+                <div class="scrollable-wrapper">
+            """
+            
+            for node_type, frequencies in freq_data.items():
+                if frequencies:  # Only show node types that have frequencies
+                    html += f"""
+                    <h4>Node Type: {node_type}</h4>
+                    <table>
+                        <tr>
+                            <th>Node</th>
+                            <th>Normalized Frequency</th>
+                        </tr>
+                    """
+                    
+                    for node, freq in sorted(frequencies.items(), key=lambda x: x[1], reverse=True):
+                        html += f"""
+                        <tr>
+                            <td>{node}</td>
+                            <td>{freq:.4f}</td>
+                        </tr>
+                        """
+                    html += "</table>"
+            
+            html += """
+                </div>
+            </div>
+            """
+        
+        return html + "</div>"
     
     def _generate_shortest_paths_html(self) -> str:
         """
-        Generate HTML content for the shortest paths section, organized by path length.
+        Generate HTML content for the shortest paths section.
         
-        This method creates a complete HTML section that includes:
-        - Path information grouped by length, with each length in its own section
-        
-        The method processes self.shortest_paths which should contain dictionaries with
-        path information including 'length', 'start', 'end', and 'path' keys.
+        Creates a comprehensive overview of all shortest paths found, including:
+        - Total number of paths
+        - Paths organized by length
+        - Path visualizations with node connections
         
         Returns:
-            str: Formatted HTML string containing the complete shortest paths analysis. 
-            If no paths are found, returns a simple "No paths found" message
-        
+            str: HTML-formatted string containing the complete shortest paths analysis,
+                or a "No paths found" message if none exist
         """
         if not self.shortest_paths:
             return "<p>No paths found.</p>"
@@ -373,52 +597,6 @@ class ProteinNetworkAnalyzer:
         
         html += "</table>"
         return html
-    
-    def _generate_ubiquitous_nodes_section(self) -> str:
-        """
-        Generate HTML content for displaying ubiquitous nodes analysis results.
-
-        This method creates a formatted HTML table showing all nodes that appear frequently
-        in the analyzed network paths (ubiquitous nodes). A node is considered ubiquitous
-        if it appears in a proportion of paths greater than the threshold specified during
-        initialization.
-
-        Returns:
-            str: HTML-formatted string containing either:
-                - A table with columns for Node, Type, and Occurrences if ubiquitous nodes exist
-                - A "No ubiquitous nodes found" message if no nodes meet the threshold
-        """
-        if not self.ubiquitous_nodes:
-            return "<p>No ubiquitous nodes found.</p>"
-
-        html = """
-        <table>
-            <thead>
-                <tr>
-                    <th>Node</th>
-                    <th>Type</th>
-                    <th>Occurrences</th>
-                </tr>
-            </thead>
-            <tbody>
-        """
-
-        for node in sorted(self.ubiquitous_nodes):
-            node_type = self.node_types.get(node, 'Unknown')
-            occurrences = sum(node in path['path'] for path in self.shortest_paths)
-            html += f"""
-                <tr>
-                    <td>{node}</td>
-                    <td>{node_type}</td>
-                    <td>{occurrences}</td>
-                </tr>
-            """
-
-        html += """
-            </tbody>
-        </table>
-        """
-        return html
 
     def _generate_centrality_section(self, centrality_scores: dict) -> str:
         """
@@ -483,12 +661,19 @@ class ProteinNetworkAnalyzer:
     def generate_html_report(self, execution_time: float) -> str:
         """
         Generate a comprehensive HTML report of the network analysis.
-
+        
+        Creates a complete HTML document containing:
+        - Network overview statistics
+        - Shortest paths analysis
+        - Node frequency analysis
+        - Centrality analysis
+        - Execution metadata
+        
         Args:
             execution_time (float): Total execution time of the analysis in seconds
-
+        
         Returns:
-            str: Complete HTML document containing analysis results
+            str: Complete HTML document string containing all analysis results
         """
         print("\n=== Starting HTML Report Generation ===")
         print("Compiling analysis results...")
@@ -501,24 +686,97 @@ class ProteinNetworkAnalyzer:
             <meta charset="UTF-8">
             <title>Protein Network Analysis Report</title>
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 2rem; color: #333; line-height: 1.6; }}
-                .container {{ max-width: 1200px; margin: 0 auto; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 1rem 0; }}
-                th, td {{ padding: 0.5rem; border: 1px solid #ddd; text-align: left; }}
-                th {{ background-color: #f5f5f5; cursor: pointer; }}
-                th:hover {{ background-color: #e5e5e5; }}
-                tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .section {{ margin: 2rem 0; padding: 1rem; border-radius: 5px; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-                h1, h2 {{ color: #2c3e50; margin-top: 0; }}
-                .meta-info {{ color: #666; font-size: 0.9rem; }}
-                .centrality-stats {{ margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; }}
-                .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }}
-                .stat-item {{ padding: 10px; }}
-                .stat-item label {{ font-weight: bold; display: block; }}
-                .search-input {{ width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; }}
-                .centrality-table-container {{ margin-top: 20px; overflow-x: auto; }}
-                .sticky-header {{ position: sticky; top: 0; background-color: white; z-index: 2; padding: 1rem 0; }}
+                body {{ 
+                    font-family: Arial, sans-serif; 
+                    margin: 2rem; 
+                    color: #333; 
+                    line-height: 1.6; 
+                }}
+                .container {{ 
+                    max-width: 1200px; 
+                    margin: 0 auto; 
+                }}
+                table {{ 
+                    width: 100%; 
+                    border-collapse: collapse; 
+                    margin: 1rem 0;
+                    table-layout: fixed;
+                }}
+                th, td {{ 
+                    padding: 0.5rem; 
+                    border: 1px solid #ddd; 
+                    text-align: left;
+                    min-width: 150px;
+                    max-width: 300px;
+                }}
+                td {{ 
+                    white-space: nowrap;
+                    overflow-x: auto;
+                    position: relative;
+                }}
+                td::-webkit-scrollbar {{
+                    height: 8px;
+                }}
+                td::-webkit-scrollbar-track {{
+                    background: #f1f1f1;
+                    border-radius: 4px;
+                }}
+                td::-webkit-scrollbar-thumb {{
+                    background: #888;
+                    border-radius: 4px;
+                }}
+                td::-webkit-scrollbar-thumb:hover {{
+                    background: #555;
+                }}
+                td.scrollable::after {{
+                    content: '⟷';
+                    position: absolute;
+                    right: 4px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    color: #888;
+                    font-size: 12px;
+                    opacity: 0.7;
+                }}
+                th {{ 
+                    background-color: #f5f5f5; 
+                    position: sticky;
+                    top: 0;
+                    z-index: 10;
+                }}
+                tr:nth-child(even) {{ 
+                    background-color: #f9f9f9; 
+                }}
+                tr:hover {{ 
+                    background-color: #f5f5f5; 
+                }}
+                .section {{ 
+                    margin: 2rem 0; 
+                    padding: 1rem; 
+                    border-radius: 5px; 
+                    background-color: #fff; 
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+                }}
+                .scrollable-wrapper {{
+                    overflow-x: auto;
+                    margin: 1rem 0;
+                    padding-bottom: 1rem;
+                }}
+                h1, h2 {{ 
+                    color: #2c3e50; 
+                    margin-top: 0; 
+                }}
+                .meta-info {{ 
+                    color: #666; 
+                    font-size: 0.9rem; 
+                }}
+                .sticky-header {{ 
+                    position: sticky; 
+                    top: 0; 
+                    background-color: white; 
+                    z-index: 20; 
+                    padding: 1rem 0; 
+                }}
             </style>
         </head>
         <body>
@@ -533,28 +791,31 @@ class ProteinNetworkAnalyzer:
                 
                 <div class="section">
                     <h2>Network Overview</h2>
-                    <p>Total proteins found: {len(self.proteins)}</p>
-                    <p>Total nodes in network: {len(self.graph.nodes)}</p>
+                    <div class="scrollable-wrapper">
+                        <p>Total proteins found: {len(self.proteins)}</p>
+                        <p>Total nodes in network: {len(self.graph.nodes)}</p>
+                    </div>
                 </div>
 
                 <div class="section">
                     <h2>Shortest Paths Analysis</h2>
-                    {self._generate_shortest_paths_html()}
+                    <div class="scrollable-wrapper">
+                        {self._generate_shortest_paths_html()}
+                    </div>
                 </div>
                 
                 <div class="section">
-                    <h2>Node Recurrence Analysis</h2>
-                    {self._generate_frequent_nodes_section()}
-                </div>
-
-                <div class="section">
-                    <h2>Ubiquitous Nodes</h2>
-                    {self._generate_ubiquitous_nodes_section()}
+                    <h2>Node Frequencies</h2>
+                    <div class="scrollable-wrapper">
+                        {self._generate_frequent_nodes_section()}
+                    </div>
                 </div>
 
                 <div class="section">
                     <h2>Centrality Analysis</h2>
-                    {self._generate_centrality_section(centrality_scores)}
+                    <div class="scrollable-wrapper">
+                        {self._generate_centrality_section(centrality_scores)}
+                    </div>
                 </div>
             </div>
         </body>
@@ -563,6 +824,7 @@ class ProteinNetworkAnalyzer:
         print("Report generation successful")
         print("=== HTML Report Generation Complete ===\n")
         return template
+
 
     def generate_txt_report(self, execution_time: float) -> str:
         """
@@ -606,44 +868,66 @@ class ProteinNetworkAnalyzer:
         return "\n".join(lines)
 
 def main():
+    """
+    Entry point for the protein network analysis script.
+    
+    Parses command line arguments to:
+    - Load and analyze protein interaction networks from GraphML files
+    - Compute shortest paths and centrality metrics
+    - Generate analysis reports in HTML or TXT format
+    - Display the report in the default system viewer
+    
+    Command line arguments:
+        -f, --file: Path to GraphML file (required)
+        -o, --output: Output file path (default: network_analysis.html)
+        --format: Output format, 'html' or 'txt' (default: html)
+        --no-open: Don't automatically open the report
+        -r, --random-nodes: Number of nodes to select randomly
+        -l, --node-list: List of specific nodes to analyze
+        --disable-blacklist: Disable the default metabolite blacklist
+    """
     parser = argparse.ArgumentParser(description="Analyze protein interaction networks")
     parser.add_argument('-f', '--file', required=True, help="Path to GraphML file")
-    parser.add_argument('-i', '--iterations', type=int, default=100,
-                       help="Number of iterations for path analysis")
-    parser.add_argument('-k', '--centrality-samples', type=int, default=100,
-                       help="Number of samples for centrality calculation")
     parser.add_argument('-o', '--output', default='network_analysis.html',
-                       help="Output file path (HTML or TXT)")
+                       help="Output file path")
     parser.add_argument('--format', choices=['html', 'txt'], default='html',
                        help="Output report format")
     parser.add_argument('--no-open', action='store_true',
                        help="Don't automatically open the report")
-    parser.add_argument('-t', '--threshold', type=float, default=0.9,
-                       help="Threshold for ubiquitous nodes identification")
-
+    node_group = parser.add_mutually_exclusive_group()
+    node_group.add_argument('-r', '--random-nodes', type=int,
+                           help="Number of nodes to select randomly")
+    node_group.add_argument('-l', '--node-list', nargs='+',
+                           help="List of specific nodes to analyze")
+    parser.add_argument('--disable-blacklist', action='store_true',
+                       help="Disable the default metabolite blacklist")
     args = parser.parse_args()
-    
-
-    print("\n=== Starting Protein Network Analysis ===")
-    print(f"Input file: {args.file}")
-    print(f"Number of iterations: {args.iterations}")
-    print(f"Centrality samples: {args.centrality_samples}")
-    print(f"Output format: {args.format}")
-
     start_time = time.time()
     
-    print("\n=== Initializing Network ===")
-    analyzer = ProteinNetworkAnalyzer(args.file, args.threshold)
-    print(f"Loaded network with {len(analyzer.proteins)} proteins")
-    print("=== Network Initialization Complete ===\n")
+    try:
+        analyzer = ProteinNetworkAnalyzer(
+            args.file,
+            custom_blacklist=set() if args.disable_blacklist else None
+        )
+    except Exception as e:
+        print(f"Error initializing network analyzer: {e}")
+        return
     
-    analyzer.analyze_paths(args.iterations)
-    analyzer.calculate_centrality(args.centrality_samples)
-    analyzer.identify_ubiquitous_nodes()
+    try:
+        paths_found = analyzer.analyze_paths(
+            num_nodes=args.random_nodes,
+            node_list=args.node_list
+        )
+        print(f"Successfully analyzed {paths_found} paths")
+    except ValueError as e:
+        print(f"Error: {str(e)}")
+        return
+    except Exception as e:
+        print(f"Error during path analysis: {e}")
+        return
     
     execution_time = time.time() - start_time
     
-    print("\n=== Generating Final Report ===")
     if args.format == 'html':
         content = analyzer.generate_html_report(execution_time)
         extension = '.html'
@@ -653,15 +937,18 @@ def main():
 
     filename = os.path.splitext(args.output)[0] + extension
     
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"\nReport saved to: {filename}")
+    except Exception as e:
+        print(f"Error saving report: {e}")
+        return
     
-    print(f"\n=== Analysis Summary ===")
-    print(f"Report saved to: {filename}")
     print(f"Total execution time: {execution_time:.2f} seconds")
     
-    absolute_path = os.path.abspath(filename)
     if not args.no_open:
+        absolute_path = os.path.abspath(filename)
         try:
             if os.name == 'nt':
                 os.startfile(absolute_path)
@@ -669,12 +956,10 @@ def main():
                 os.system(f'open "{absolute_path}"')
             else:
                 os.system(f'xdg-open "{absolute_path}"')
-            print(f"Opening report in default application...")
+            print("Opening report in default application...")
         except Exception as e:
             print(f"Error opening file: {e}")
             print("Please open the file manually.")
-    
-    print("=== Analysis Complete ===\n")
 
 if __name__ == "__main__":
     main()

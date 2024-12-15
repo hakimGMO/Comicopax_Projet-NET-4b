@@ -3,23 +3,27 @@
 ## Description
 Projet de couplage de données transcriptomiques, protéomiques et métabolomiques par une approche systémique.
 
-### Contexte
+### Contexte Scientifique
 - Collaboration : Emmanuelle Becker et Olivier Dameron (Laboratoire INRIA-IRISA) et Florence Gondret (Laboratoire IINRAe-PEGASE)
 - Contexte biologique : Intégration de données -omiques de nature différentes
 - Méthodes : Parcours de graphes, marches aléatoires
-- Format : BioPAX
+- Format de données : BioPAX
 
 ## Fonctionnalités
-- Analyse de réseaux protéiques
+## Analyse de réseaux protéiques :
 - Calcul des chemins les plus courts
 - Analyse de centralité des nœuds
 - Identification des nœuds ubiquitaires
-- Génération de rapports HTML et TXT
-- Support du traitement parallèle
+- Filtrage intelligent des métabolites non pertinents
+  
+## Génération de rapports HTML et TXT :
+- Rapports HTML interactifs avec visualisations
+- Rapports texte pour intégration dans des pipelines
+- STatistiques détaillées dur le réseau
 
 ## Prérequis
-- Python 3.x
-- NetworkX
+- Python 3.7+
+- NetworkX 2.8+
 
 ## Installation
 1. Cloner le dépôt :
@@ -33,7 +37,7 @@ cd Comicopax_Projet-NET-4b
 pip install networkx
 ```
 ## Utilisation
-Execution de base :
+Commande de base :
 ```bash
 python protein_network_analyzer.py -f chemin/vers/fichier.graphml
 ```
@@ -66,6 +70,21 @@ le seuil pour l'identification des nœuds ubiquitaires par défaut mis à 0.9.
 ```bash
 -t ou --threshold
 ```
+## Structure du projet :
+
+```
+Comicopax/
+├── src/
+│   ├── protein_network_analyzer.py
+│   ├── utils/
+│   └── tests/
+├── data/
+│   └── example_networks/
+├── docs/
+├── requirements.txt
+└── README.md
+```
+
 ## Workflow git
 Mettre a jour son dépôt local :
 ```bash
@@ -76,8 +95,18 @@ Soumettre des modifications :
 git commit -a -m "Description des modifications"
 git push
 ```
+
+## Bonnes pratiques :
+```
+- Créer une branche par fonctionnalité
+- Faire des commits atomiques et descriptifs
+- Faire une revue de code avant le merge
+- Mettre à jour régulièrement depuis main
+```
+
 ## Documentation
 + Documentation NetworkX : https://networkx.org/documentation/stable/reference/readwrite/generated/networkx.readwrite.graphml.read_graphml.html
++ Liens utiles de BIOPAX : https://www.biopax.org
 + Tutoriels sur les bibliothèques de graphes : https://youtube.com/playlist?list=PLGZqdNxqKzfYXTwYAZIlmjnQmrytCSR1J&si=7r3W5AKvKs33zUx0
 
 ## Contributeurs
@@ -88,3 +117,7 @@ git push
 + Pierrick Matelot
 + Raphael Pageau
 + Chenao Wu
+
+## Contact :
+
+Pour toute question ou suggestion, veuillez créer une issue sur GitHub ou contacter l'équipe de développement.

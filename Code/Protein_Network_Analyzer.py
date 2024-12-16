@@ -242,17 +242,13 @@ class ProteinNetworkAnalyzer:
                 pair = (p1, p2)
                 paths = self.find_all_shortest_paths(p1, p2)
                 
-                if paths:  # Only process if paths were found
+                if paths:
                     total_paths_found += len(paths)
                     self._compute_pair_frequencies(paths, pair)
                     
                     for path in paths:
-                        self.shortest_paths.append({
-                            'start': path[0],
-                            'end': path[-1],
-                            'path': path,
-                            'length': len(path) - 1
-                        })
+                        self.shortest_paths.append({'start': path[0],'end': path[-1],
+                                                    'path': path,'length': len(path) - 1})
                         
                         for node in path:
                             self.analyzed_nodes.add(node)
@@ -757,6 +753,9 @@ class ProteinNetworkAnalyzer:
         """
         print("\n=== Starting TXT Report Generation ===")
         print("Compiling analysis results...")
+        
+        centrality_scores = self.calculate_centrality()
+        
         lines = [
             "=== Protein Network Analysis ===",
             f"Executed on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -764,23 +763,44 @@ class ProteinNetworkAnalyzer:
             "=== General Statistics ===",
             f"Number of proteins: {len(self.proteins)}",
             f"Analyzed paths: {len(self.shortest_paths)}\n",
-            "=== Shortest Paths ===",
+            "=== Shortest Paths ==="
         ]
 
-        for info in self.shortest_paths:
-            path_str = " -> ".join(info['path'])
-            lines.append(
-                f"From {info['start']} to {info['end']} "
-                f"(length: {info['length']}):\n{path_str}\n"
-            )
+        paths_by_length = defaultdict(list)
+        for path_info in self.shortest_paths:
+            paths_by_length[path_info['length']].append(path_info)
+        
+        for length in sorted(paths_by_length.keys()):
+            lines.append(f"\nPaths of length {length} ({len(paths_by_length[length])} paths):")
+            for info in paths_by_length[length]:
+                path_str = " -> ".join(info['path'])
+                lines.append(f"From {info['start']} to {info['end']}:\n{path_str}")
 
-        lines.append("\n=== Frequent Nodes by Type ===")
-        for node_type, occurrences in self.frequent_nodes.items():
+        lines.append("\n=== Node Frequencies by Type ===")
+        normalized_freqs = self.get_normalized_frequencies()
+        for node_type, frequencies in normalized_freqs.items():
             lines.append(f"\nType: {node_type}")
-            for node, freq in sorted(occurrences.items(), 
-                                   key=lambda x: x[1], 
-                                   reverse=True)[:10]:
-                lines.append(f"{node}: {freq} occurrences")
+            # Sort by frequency and show top 10
+            sorted_nodes = sorted(frequencies.items(), key=lambda x: x[1], reverse=True)[:10]
+            for node, freq in sorted_nodes:
+                lines.append(f"{node}: {freq:.4f}")
+
+        lines.append("\n=== Centrality Analysis ===")
+        if centrality_scores:
+            nodes_by_type = defaultdict(list)
+            for node, score in centrality_scores.items():
+                node_type = self.node_types.get(node, 'Unknown')
+                nodes_by_type[node_type].append((node, score))
+            
+            for node_type, nodes in sorted(nodes_by_type.items()):
+                nodes.sort(key=lambda x: x[1], reverse=True)
+                top_nodes = nodes[:10]  # Show top 10 nodes per type
+                if top_nodes:
+                    lines.append(f"\nTop {len(top_nodes)} {node_type} Nodes by Centrality:")
+                    for node, score in top_nodes:
+                        lines.append(f"{node}: {score:.6f}")
+        else:
+            lines.append("No centrality scores available.")
 
         print("Report generation successful")
         print("=== TXT Report Generation Complete ===\n")

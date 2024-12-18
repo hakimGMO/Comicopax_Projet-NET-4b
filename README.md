@@ -1,8 +1,6 @@
 # Comicopax_Projet-NET-4b
-
 ## Description
 Projet de couplage de données transcriptomiques, protéomiques et métabolomiques par une approche systémique.
-
 ### Contexte Scientifique
 - Collaboration : Emmanuelle Becker et Olivier Dameron (Laboratoire INRIA-IRISA) et Florence Gondret (Laboratoire IINRAe-PEGASE)
 - Contexte biologique : Intégration de données -omiques de nature différentes
@@ -10,20 +8,26 @@ Projet de couplage de données transcriptomiques, protéomiques et métabolomiqu
 - Format de données : BioPAX
 
 ## Fonctionnalités
-## Analyse de réseaux protéiques :
-- Calcul des chemins les plus courts
-- Analyse de centralité des nœuds
-- Identification des nœuds ubiquitaires
-- Filtrage intelligent des métabolites non pertinents
-  
-## Génération de rapports HTML et TXT :
-- Rapports HTML interactifs avec visualisations
+### Analyse de réseaux protéiques :
+- Identification et analyse des chemins les plus courts entre les protéines
+- Calcul de centralité de betweenness pour les nœuds du réseau
+- Analyse des fréquences d'apparition des nœuds dans les chemins
+- Filtrage intelligent des métabolites via une liste noire configurable
+- Support des analyses sur graphes dirigés et non-dirigés
+
+### Génération de rapports :
+- Rapports HTML interactifs avec tableaux et visualisations
 - Rapports texte pour intégration dans des pipelines
-- STatistiques détaillées dur le réseau
+- Statistiques détaillées incluant :
+  - Vue d'ensemble du réseau
+  - Analyse des chemins les plus courts
+  - Distribution des fréquences des nœuds
+  - Scores de centralité
 
 ## Prérequis
 - Python 3.7+
-- NetworkX 2.8+
+- NetworkX
+- concurrent.futures (inclus dans Python standard)
 
 ## Installation
 1. Cloner le dépôt :
@@ -32,46 +36,44 @@ git clone https://github.com/hakimGMO/Comicopax_Projet-NET-4b.git
 cd Comicopax_Projet-NET-4b
 ```
 
-2. installer les dépendances
+2. Installer les dépendances :
 ```bash
 pip install networkx
 ```
+
 ## Utilisation
 Commande de base :
 ```bash
 python protein_network_analyzer.py -f chemin/vers/fichier.graphml
 ```
-Options possibles :
-Le chemin vers le fichier GraphML qui est obligatoire.
-```bash
--f ou --file
-```
-Le nombre d'itérations pour l'analyse des chemins par défaut mis à 100 itérations.
-```bash
--i ou --iterations 
-```
-Le nombre d'échantillons pour le calcul de centralité par défaut mis à 100 échantillons.
-```bash
--k ou --centrality-samples
-```
-Le chemin du fichier de sortie qui sera par défaut "./network_analysis.html".
-```bash
--o ou --output
-```
-Le format de sortie du rapport HTML ou TXT, qui est par défaut un rapport HTML.
-```bash
---format
-```
-Permet de ne pas ouvrir automatiquement le rapport à la fin de l'éxecution.
-```bash
---no-open
-```
-le seuil pour l'identification des nœuds ubiquitaires par défaut mis à 0.9.
-```bash
--t ou --threshold
-```
-## Structure du projet :
 
+Options disponibles :
+```
+Arguments requis :
+  -f, --file           Chemin vers le fichier GraphML
+
+Arguments optionnels :
+  -o, --output         Chemin du fichier de sortie (défaut: network_analysis.html)
+  --format            Format de sortie ('html' ou 'txt', défaut: html)
+  --no-open           Ne pas ouvrir automatiquement le rapport
+  -r, --random-nodes  Nombre de nœuds à sélectionner aléatoirement
+  -l, --node-list     Liste spécifique de nœuds à analyser
+  --disable-blacklist Désactiver la liste noire des métabolites par défaut
+```
+
+Exemples d'utilisation :
+```bash
+# Analyse basique avec rapport HTML
+python protein_network_analyzer.py -f network.graphml
+
+# Analyse de nœuds spécifiques avec rapport texte
+python protein_network_analyzer.py -f network.graphml -l Protein1 Protein2 --format txt
+
+# Analyse aléatoire avec rapport personnalisé
+python protein_network_analyzer.py -f network.graphml -r 10 -o custom_report.html
+```
+
+## Structure du projet
 ```
 Comicopax/
 ├── src/
@@ -90,18 +92,11 @@ Mettre a jour son dépôt local :
 ```bash
 git pull
 ```
+
 Soumettre des modifications :
 ```bash
 git commit -a -m "Description des modifications"
 git push
-```
-
-## Bonnes pratiques :
-```
-- Créer une branche par fonctionnalité
-- Faire des commits atomiques et descriptifs
-- Faire une revue de code avant le merge
-- Mettre à jour régulièrement depuis main
 ```
 
 ## Documentation
@@ -110,7 +105,6 @@ git push
 + Tutoriels sur les bibliothèques de graphes : https://youtube.com/playlist?list=PLGZqdNxqKzfYXTwYAZIlmjnQmrytCSR1J&si=7r3W5AKvKs33zUx0
 
 ## Contributeurs
-
 + Abdelhakim Bouazzaoui
 + Francisco Bretas
 + Corentin Dumortier
@@ -118,6 +112,5 @@ git push
 + Raphael Pageau
 + Chenao Wu
 
-## Contact :
-
+## Contact
 Pour toute question ou suggestion, veuillez créer une issue sur GitHub ou contacter l'équipe de développement.

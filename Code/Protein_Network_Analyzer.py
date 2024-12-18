@@ -37,7 +37,7 @@ class ProteinNetworkAnalyzer:
 
     DEFAULT_BLACKLIST = {
         'ATP', 'ADP','NADH', 'NAD+','NADPH', 'NADP+','FADH2', 'FAD','Pyruvate','Pi', 'Phosphate',
-        'PPi', 'Pyrophosphate','H+', 'Proton','CO2','H2O','O2'}
+        'PPi', 'Pyrophosphate','H+', 'Proton','CO2','H2O','O2', 'water'}
 
     def __init__(self, graphml_file: str, custom_blacklist: set = None):
         """
@@ -78,8 +78,23 @@ class ProteinNetworkAnalyzer:
         self.normalized_frequencies = defaultdict(lambda: defaultdict(float))
         self.analyzed_nodes = set()
         
+        self.directed_graph = self.graph
         self.undirected_graph = self.graph.to_undirected()
     
+    def _relabel_nodes(self):
+        """
+        Relabel network nodes using their 'name' attribute if available.
+        
+        Modifies the graph in place by replacing node IDs with their corresponding
+        names from the 'name' attribute of each node.
+        """
+        new_names = {}
+        for node in self.graph.nodes:
+            if 'name' in self.graph.nodes[node]:
+                new_names[node] = self.graph.nodes[node]['name']
+        self.graph = nx.relabel_nodes(self.graph, new_names)
+
+
     def _is_blacklisted(self, node_name: str) -> bool:
         """
         Check if a node is blacklisted using exact matching.
@@ -102,37 +117,7 @@ class ProteinNetworkAnalyzer:
                 return True
                 
         return False
-
-    def _relabel_nodes(self):
-        """
-        Relabel network nodes using their 'name' attribute if available.
-        
-        Modifies the graph in place by replacing node IDs with their corresponding
-        names from the 'name' attribute of each node.
-        """
-        new_names = {}
-        for node in self.graph.nodes:
-            if 'name' in self.graph.nodes[node]:
-                new_names[node] = self.graph.nodes[node]['name']
-        self.graph = nx.relabel_nodes(self.graph, new_names)
-
-    def find_all_shortest_paths(self, start: str, end: str) -> list:
-        """
-        Find all shortest paths between two nodes in the network.
-
-        Args:
-            start (str): Starting node identifier
-            end (str): Target node identifier
-            
-        Returns:
-            list: List of paths, where each path is a list of node identifiers.
-                Returns None if no path exists between the nodes.
-        """
-        try:
-            return list(nx.all_shortest_paths(self.undirected_graph, source=start, target=end))
-        except (nx.NetworkXNoPath, nx.NetworkXError):
-            return None
-
+    
     def select_nodes(self, num_nodes=None, node_list=None):
         """
         Select nodes for analysis, raising error if blacklisted nodes are found.
@@ -189,6 +174,22 @@ class ProteinNetworkAnalyzer:
             
         return valid_nodes
 
+    def find_all_shortest_paths(self, start: str, end: str) -> list:
+        """
+        Find all shortest paths between two nodes in the network.
+
+        Args:
+            start (str): Starting node identifier
+            end (str): Target node identifier
+            
+        Returns:
+            list: List of paths, where each path is a list of node identifiers.
+                Returns None if no path exists between the nodes.
+        """
+        try:
+            return list(nx.all_shortest_paths(self.undirected_graph, source=start, target=end))
+        except (nx.NetworkXNoPath, nx.NetworkXError):
+            return None
 
     def _compute_pair_frequencies(self, paths: List[List[str]], pair: Tuple[str, str]):
         """
@@ -213,21 +214,47 @@ class ProteinNetworkAnalyzer:
         
         self.pair_frequencies[pair] = normalized_freqs
 
-    def analyze_paths(self, num_nodes=None, node_list=None):
+    def get_normalized_frequencies(self):
         """
-        Analyze shortest paths between selected proteins in the network and compute path frequencies.
+        Retrieve the combined normalized frequencies of nodes in all shortest paths.
+        
+        Returns:
+            dict: A nested dictionary structure
+        """
+        return dict(self.normalized_frequencies)
+
+    def find_all_shortest_paths(self, start: str, end: str, directed: bool = True) -> list:
+        """
+        Find all shortest paths between two nodes in the network.
+
+        Args:
+            start (str): Starting node identifier
+            end (str): Target node identifier
+            directed (bool): Whether to respect edge direction (default: True)
+            
+        Returns:
+            list: List of paths, where each path is a list of node identifiers.
+                Returns None if no path exists between the nodes.
+        """
+        try:
+            graph = self.directed_graph if directed else self.undirected_graph
+            return list(nx.all_shortest_paths(graph, source=start, target=end))
+        except (nx.NetworkXNoPath, nx.NetworkXError):
+            return None
+
+    def analyze_paths(self, num_nodes=None, node_list=None, directed: bool = True):
+        """
+        Analyze shortest paths between selected proteins in the network.
 
         Args:
             num_nodes (int, optional): Number of random proteins to analyze
             node_list (List[str], optional): List of specific proteins to analyze
-
+            directed (bool): Whether to respect edge direction (default: True)
+            
         Returns:
             int: Total number of shortest paths found in the analysis
-            
-        Raises:
-            ValueError: If neither num_nodes nor node_list is provided, or if no valid nodes are found
         """
-        print("\n=== Starting Path Analysis ===")
+        print(f"\n=== Starting {'Directed' if directed else 'Undirected'} Path Analysis ===")
         
         try:
             selected_proteins = self.select_nodes(num_nodes, node_list)
@@ -240,23 +267,23 @@ class ProteinNetworkAnalyzer:
             
             for p1, p2 in pairs:
                 pair = (p1, p2)
-                paths = self.find_all_shortest_paths(p1, p2)
+                paths = self.find_all_shortest_paths(p1, p2, directed=directed)
                 
                 if paths:
                     total_paths_found += len(paths)
                     self._compute_pair_frequencies(paths, pair)
                     
                     for path in paths:
-                        self.shortest_paths.append({'start': path[0],'end': path[-1],
-                                                    'path': path,'length': len(path) - 1})
+                        self.shortest_paths.append({
+                            'start': path[0],
+                            'end': path[-1],
+                            'path': path,
+                            'length': len(path) - 1,
+                            'directed': directed
+                        })
                         
                         for node in path:
                             self.analyzed_nodes.add(node)
-            
-            for pair_freqs in self.pair_frequencies.values():
-                for node_type, nodes in pair_freqs.items():
-                    for node, norm_freq in nodes.items():
-                        self.normalized_frequencies[node_type][node] += norm_freq
             
             print(f"Found {total_paths_found} shortest paths analyzing {len(pairs)} pairs")
             print("=== Path Analysis Complete ===\n")
@@ -269,28 +296,34 @@ class ProteinNetworkAnalyzer:
     def calculate_centrality(self):
         """
         Calculate normalized betweenness centrality for all encountered nodes.
+        Uses NetworkX's built-in normalization only.
         
         Returns:
-            dict: Mapping of nodes to their normalized centrality scores 
-                (normalized by NetworkX's built-in normalization)
+            dict: Mapping of nodes to their normalized centrality scores
         """
         if not self.analyzed_nodes:
             return {}
             
         print("\n=== Starting Centrality Calculation ===")
-        analyzed_subgraph = self.undirected_graph.subgraph(self.analyzed_nodes)
+        analyzed_subgraph = self.directed_graph.subgraph(self.analyzed_nodes)
         normalized_centrality = defaultdict(float)
         
         try:
             if len(self.analyzed_nodes) < 1000:
-                return nx.betweenness_centrality(analyzed_subgraph, normalized=True)
+                return nx.betweenness_centrality(
+                    analyzed_subgraph,
+                    normalized=True
+                )
         except:
             pass
             
-        components = list(nx.connected_components(analyzed_subgraph))
-        total_nodes = len(analyzed_subgraph)
+        components = list(nx.weakly_connected_components(analyzed_subgraph) 
+                        if analyzed_subgraph.is_directed() 
+                        else nx.connected_components(analyzed_subgraph))
+        
         chunk_size = max(1, len(components) // (os.cpu_count() or 4))
-        component_chunks = [components[i:i + chunk_size] for i in range(0, len(components), chunk_size)]
+        component_chunks = [components[i:i + chunk_size] 
+                        for i in range(0, len(components), chunk_size)]
         
         with ProcessPoolExecutor() as executor:
             futures = []
@@ -301,30 +334,23 @@ class ProteinNetworkAnalyzer:
                         continue
                         
                     subgraph = analyzed_subgraph.subgraph(comp)
-                    futures.append(executor.submit(nx.betweenness_centrality, subgraph, normalized=True))
-                    
-            for future, comp in zip(as_completed(futures), (c for chunk in component_chunks for c in chunk if len(c) > 1)):
+                    futures.append(executor.submit(
+                        nx.betweenness_centrality,
+                        subgraph,
+                        normalized=True
+                    ))
+                        
+            for future, comp in zip(as_completed(futures), 
+                                (c for chunk in component_chunks 
+                                for c in chunk if len(c) > 1)):
                 try:
-                    comp_size_factor = len(comp) / total_nodes
-                    normalized_centrality.update({
-                        node: score * comp_size_factor 
-                        for node, score in future.result().items()
-                    })
+                    normalized_centrality.update(future.result())
                 except Exception as e:
                     print(f"Error in component: {e}")
                     normalized_centrality.update({node: 0.0 for node in comp})
         
         print("=== Centrality Calculation Complete ===\n")
         return dict(normalized_centrality)
-
-    def get_normalized_frequencies(self):
-        """
-        Retrieve the combined normalized frequencies of nodes in all shortest paths.
-        
-        Returns:
-            dict: A nested dictionary structure
-        """
-        return dict(self.normalized_frequencies)
 
     def _generate_frequent_nodes_section(self):
         """
@@ -348,7 +374,7 @@ class ProteinNetworkAnalyzer:
                                 key=lambda x: x[1], 
                                 reverse=True)
             
-            if sorted_nodes:  # If we have nodes of this type
+            if sorted_nodes:
                 html += f"""
                     <h3>Type: {node_type}</h3>
                     <table>
